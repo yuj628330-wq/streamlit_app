@@ -1,457 +1,167 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import matplotlib.pyplot as plt
-from wordcloud import WordCloud
-from googleapiclient.discovery import build
-from urllib.parse import urlparse, parse_qs
-import re
 import os
-from io import BytesIO
-from datetime import datetime
+import re
+import urllib.request
+import matplotlib.pyplot as plt
+import pandas as pd
+import streamlit as st
+from googleapiclient.discovery import build
+from wordcloud import WordCloud
 
-# --------------------------------------------------
-# Streamlit 설정
-# --------------------------------------------------
-
+# --- 1. 페이지 설정 및 한글 폰트 로드 ---
 st.set_page_config(
-    page_title="YouTube 댓글 분석기",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="유튜브 댓글 분석기", page_icon="📊", layout="wide"
 )
 
-# --------------------------------------------------
-# CSS
-# --------------------------------------------------
+FONT_PATH = "NanumGothic.ttf"
 
-st.markdown("""
-<style>
 
-.main{
-    padding-top:20px;
-}
+@st.cache_resource
+def download_korean_font():
+    """스트림릿 클라우드 환경을 위한 나눔고딕 폰트 다운로드"""
+    if not os.path.exists(FONT_PATH):
+        font_url = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
+        urllib.request.urlretrieve(font_url, FONT_PATH)
 
-.block-container{
-    padding-top:1rem;
-}
 
-.metric-card{
-    background:#f7f7f7;
-    padding:15px;
-    border-radius:15px;
-}
+download_korean_font()
 
-.stButton>button{
-    width:100%;
-    border-radius:10px;
-    height:45px;
-    font-size:18px;
-}
 
-</style>
-""", unsafe_allow_html=True)
+# --- 2. 유튜브 API 함수 정의 ---
+def extract_video_id(url):
+    """유튜브 URL에서 Video ID 추출"""
+    regex = r"(?:v=|\/([0-9A-Za-z_-]{11}).*[\?&]v=|^you\.tu\/|embed\/|shorts\/)([0-9A-Za-z_-]{11})"
+    match = re.search(regex, url)
+    return match.group(1) if match else None
 
-# --------------------------------------------------
-# 제목
-# --------------------------------------------------
 
-st.title("📊 YouTube 댓글 분석기")
+def get_youtube_comments(api_key, video_id, max_results=200):
+    """유튜브 댓글 수집"""
+    youtube = build("youtube", "v3", developerKey=api_key)
+    comments = []
 
-st.caption("YouTube 댓글을 수집하고 다양한 통계와 시각화를 제공합니다.")
-
-# --------------------------------------------------
-# Github Secret API
-# --------------------------------------------------
-
-try:
-    API_KEY = st.secrets["YOUTUBE_API_KEY"]
-
-except Exception:
-    st.error("YOUTUBE_API_KEY가 secrets.toml에 없습니다.")
-    st.stop()
-
-# --------------------------------------------------
-# Youtube API
-# --------------------------------------------------
-
-youtube = build(
-    "youtube",
-    "v3",
-    developerKey=API_KEY
-)
-
-# --------------------------------------------------
-# 영상ID 추출
-# --------------------------------------------------
-
-def get_video_id(url):
-
-    if "youtu.be/" in url:
-        return url.split("/")[-1].split("?")[0]
-
-    parsed = urlparse(url)
-
-    if parsed.hostname in [
-        "www.youtube.com",
-        "youtube.com"
-    ]:
-
-        if parsed.path == "/watch":
-            return parse_qs(parsed.query)["v"][0]
-
-        if parsed.path.startswith("/shorts/"):
-            return parsed.path.split("/")[2]
-
-        if parsed.path.startswith("/embed/"):
-            return parsed.path.split("/")[2]
-
-    return None
-
-# --------------------------------------------------
-# 영상정보 가져오기
-# --------------------------------------------------
-
-def get_video_info(video_id):
-
-    request = youtube.videos().list(
-        part="snippet,statistics",
-        id=video_id
-    )
-
-    response = request.execute()
-
-    if len(response["items"]) == 0:
-        return None
-
-    item = response["items"][0]
-
-    snippet = item["snippet"]
-    stat = item["statistics"]
-
-    return {
-
-        "title":
-            snippet["title"],
-
-        "channel":
-            snippet["channelTitle"],
-
-        "published":
-            snippet["publishedAt"],
-
-        "thumbnail":
-            snippet["thumbnails"]["high"]["url"],
-
-        "views":
-            int(stat.get("viewCount",0)),
-
-        "likes":
-            int(stat.get("likeCount",0)),
-
-        "comments":
-            int(stat.get("commentCount",0))
-
-    }
-
-# --------------------------------------------------
-# 댓글 수집
-# --------------------------------------------------
-
-def get_comments(video_id):
-
-    comments=[]
-
-    next_page=None
-
-    while True:
-
+    try:
         request = youtube.commentThreads().list(
-
-            part="snippet,replies",
-
-            videoId=video_id,
-
-            maxResults=100,
-
-            pageToken=next_page,
-
-            textFormat="plainText"
-
+            part="snippet", videoId=video_id, maxResults=100, textFormat="plainText"
         )
 
-        response=request.execute()
+        while request and len(comments) < max_results:
+            response = request.execute()
 
-        for item in response["items"]:
+            for item in response.get("items", []):
+                snippet = item["snippet"]["topLevelComment"]["snippet"]
+                comments.append(
+                    {
+                        "author": snippet["authorDisplayName"],
+                        "comment": snippet["textDisplay"],
+                        "like_count": snippet["likeCount"],
+                        "published_at": snippet["publishedAt"],
+                    }
+                )
 
-            top=item["snippet"]["topLevelComment"]["snippet"]
+            # 다음 페이지 토큰 확인
+            request = youtube.commentThreads().list_next(
+                previous_request=request, previous_response=response
+            )
 
-            comments.append({
-
-                "작성자":top["authorDisplayName"],
-
-                "댓글":top["textDisplay"],
-
-                "좋아요":top["likeCount"],
-
-                "작성일":top["publishedAt"],
-
-                "답글수":item["snippet"]["totalReplyCount"]
-
-            })
-
-            if "replies" in item:
-
-                for reply in item["replies"]["comments"]:
-
-                    r=reply["snippet"]
-
-                    comments.append({
-
-                        "작성자":r["authorDisplayName"],
-
-                        "댓글":r["textDisplay"],
-
-                        "좋아요":r["likeCount"],
-
-                        "작성일":r["publishedAt"],
-
-                        "답글수":0
-
-                    })
-
-        next_page=response.get("nextPageToken")
-
-        if not next_page:
-            break
+    except Exception as e:
+        st.error(f"댓글을 불러오는 중 오류가 발생했습니다: {e}")
+        return None
 
     return pd.DataFrame(comments)
 
-# --------------------------------------------------
-# Sidebar
-# --------------------------------------------------
 
-st.sidebar.header("⚙️ 설정")
+# --- 3. UI 레이아웃 ---
+st.title("🎥 유튜브 댓글 분석기")
+st.markdown("유튜브 영상 URL을 입력하면 댓글 데이터 시각화 결과를 제공합니다.")
 
-video_url = st.sidebar.text_input(
-    "YouTube URL",
-    placeholder="https://www.youtube.com/watch?v=..."
+# 사이드바: Secrets 또는 직접 입력받는 API 키
+with st.sidebar:
+    st.header("🔑 설정")
+    # Streamlit Secrets에 저장된 키가 있으면 가져오고, 없으면 직접 입력받음
+    default_api_key = st.secrets.get("YOUTUBE_API_KEY", "")
+    api_key = st.text_input(
+        "YouTube API Key", value=default_api_key, type="password"
+    )
+
+video_url = st.text_input(
+    "유튜브 영상 링크 입력",
+    placeholder="https://www.youtube.com/watch?v=...",
 )
-
-analyze = st.sidebar.button("🚀 댓글 분석 시작")
-
-# --------------------------------------------------
-# 메인 화면
-# --------------------------------------------------
-
-if not analyze:
-
-    st.info("좌측에서 유튜브 URL을 입력한 후 '댓글 분석 시작' 버튼을 누르세요.")
-
-    st.stop()
-
-video_id = get_video_id(video_url)
-
-if video_id is None:
-
-    st.error("올바른 유튜브 URL이 아닙니다.")
-
-    st.stop()
-
-progress = st.progress(0)
-
-status = st.empty()
-
-status.info("영상 정보를 가져오는 중...")
-
-progress.progress(10)
-
-video = get_video_info(video_id)
-
-if video is None:
-
-    st.error("영상을 찾을 수 없습니다.")
-
-    st.stop()
-
-status.info("댓글을 수집하는 중입니다...")
-
-progress.progress(30)
-
-# --------------------------------------------------
-# 댓글 수집
-# --------------------------------------------------
-
-df = get_comments(video_id)
-
-progress.progress(70)
-
-status.info("데이터를 정리하는 중입니다...")
-
-if df.empty:
-
-    st.warning("댓글이 존재하지 않는 영상입니다.")
-
-    st.stop()
-
-# --------------------------------------------------
-# 데이터 전처리
-# --------------------------------------------------
-
-df["댓글"] = df["댓글"].astype(str)
-
-df["댓글길이"] = df["댓글"].str.len()
-
-df["작성일"] = pd.to_datetime(df["작성일"])
-
-df["작성시간"] = df["작성일"].dt.hour
-
-df["작성날짜"] = df["작성일"].dt.date
-
-df = df.sort_values("작성일")
-
-progress.progress(80)
-
-status.info("통계를 계산하는 중입니다...")
-
-# --------------------------------------------------
-# 통계
-# --------------------------------------------------
-
-total_comments = len(df)
-
-total_authors = df["작성자"].nunique()
-
-avg_length = round(df["댓글길이"].mean(), 1)
-
-avg_like = round(df["좋아요"].mean(), 2)
-
-max_like = df["좋아요"].max()
-
-total_reply = df["답글수"].sum()
-
-progress.progress(90)
-
-status.info("화면을 생성하는 중입니다...")
-
-# --------------------------------------------------
-# 영상 정보 출력
-# --------------------------------------------------
-
-st.image(video["thumbnail"], width=400)
-
-st.subheader(video["title"])
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.metric("조회수", f"{video['views']:,}")
-
-with col2:
-    st.metric("좋아요", f"{video['likes']:,}")
-
-with col3:
-    st.metric("댓글수", f"{video['comments']:,}")
-
-st.write("---")
-
-# --------------------------------------------------
-# 댓글 통계
-# --------------------------------------------------
-
-st.header("📈 댓글 통계")
-
-c1, c2, c3 = st.columns(3)
-
-with c1:
-    st.metric("총 댓글", f"{total_comments:,}")
-
-with c2:
-    st.metric("작성자 수", f"{total_authors:,}")
-
-with c3:
-    st.metric("평균 댓글 길이", avg_length)
-
-c4, c5, c6 = st.columns(3)
-
-with c4:
-    st.metric("평균 좋아요", avg_like)
-
-with c5:
-    st.metric("최고 좋아요", max_like)
-
-with c6:
-    st.metric("답글 수", total_reply)
-
-st.write("---")
-
-# --------------------------------------------------
-# 탭 생성
-# --------------------------------------------------
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    [
-        "💬 댓글",
-        "📊 통계",
-        "📈 그래프",
-        "☁️ 워드클라우드",
-        "😊 감성분석"
-    ]
-)
-
-# --------------------------------------------------
-# 탭1 댓글
-# --------------------------------------------------
-
-with tab1:
-
-    st.subheader("댓글 목록")
-
-    keyword = st.text_input("댓글 검색")
-
-    temp = df.copy()
-
-    if keyword:
-
-        temp = temp[
-            temp["댓글"].str.contains(
-                keyword,
-                case=False,
-                na=False
-            )
-        ]
-
-    st.dataframe(
-        temp,
-        use_container_width=True,
-        height=600
-    )
-
-# --------------------------------------------------
-# 탭2 통계
-# --------------------------------------------------
-
-with tab2:
-
-    st.subheader("기초 통계")
-
-    st.dataframe(
-        df.describe(include="all"),
-        use_container_width=True
-    )
-
-    st.subheader("상위 좋아요 댓글")
-
-    st.dataframe(
-        df.sort_values(
-            "좋아요",
-            ascending=False
-        ).head(20),
-        use_container_width=True
-    )
-
-progress.progress(100)
-
-status.success("분석 완료!")
-
+max_comments = st.slider("수집할 최대 댓글 수", 50, 500, 200, step=50)
+
+if st.button("댓글 분석 시작"):
+    if not api_key:
+        st.warning("YouTube API 키를 입력해 주세요.")
+    elif not video_url:
+        st.warning("유튜브 영상 링크를 입력해 주세요.")
+    else:
+        video_id = extract_video_id(video_url)
+
+        if not video_id:
+            st.error("올바른 유튜브 URL 형식이 아닙니다.")
+        else:
+            with st.spinner("댓글을 수집하고 분석 중입니다..."):
+                df = get_youtube_comments(api_key, video_id, max_comments)
+
+            if df is not None and not df.empty:
+                st.success(f"총 {len(df)}개의 댓글을 성공적으로 가져왔습니다!")
+
+                #탭 구분
+                tab1, tab2, tab3 = st.tabs(
+                    ["📊 데이터 요약 및 시각화", "☁️ 워드 클라우드", "📋 Raw 데이터"]
+                )
+
+                # TAB 1: 주요 지표 및 기본 차트
+                with tab1:
+                    col1, col2 = st.columns(2)
+                    col1.metric("총 댓글 수", f"{len(df)}개")
+                    col2.metric("총 좋아요 수", f"{df['like_count'].sum()}개")
+
+                    st.subheader("👍 좋아요를 가장 많이 받은 상위 댓글 Top 5")
+                    top_liked = df.sort_values(
+                        by="like_count", ascending=False
+                    ).head(5)
+                    for idx, row in top_liked.iterrows():
+                        st.write(
+                            f"**{row['author']}** (👍 {row['like_count']})"
+                        )
+                        st.caption(f"{row['comment']}")
+                        st.divider()
+
+                    st.subheader("📈 댓글 좋아요 수 분포")
+                    st.bar_chart(df["like_count"].value_counts().head(10))
+
+                # TAB 2: 한글 워드 클라우드
+                with tab2:
+                    st.subheader("💬 자주 등장하는 단어 (Word Cloud)")
+                    text = " ".join(df["comment"].dropna())
+
+                    # 간단한 특수문자 제거
+                    text = re.sub(r"[^\w\s]", "", text)
+
+                    if text.strip():
+                        wc = WordCloud(
+                            font_path=FONT_PATH,
+                            background_color="white",
+                            width=800,
+                            height=400,
+                            max_words=100,
+                        ).generate(text)
+
+                        fig, ax = plt.subplots(figsize=(10, 5))
+                        ax.imshow(wc, interpolation="bilinear")
+                        ax.axis("off")
+                        st.pyplot(fig)
+                    else:
+                        st.info("시각화할 텍스트 데이터가 부족합니다.")
+
+                # TAB 3: 원본 데이터 테이블 및 CSV 다운로드
+                with tab3:
+                    st.dataframe(df)
+                    csv = df.to_csv(index=False).encode("utf-8-sig")
+                    st.download_button(
+                        label="CSV로 다운로드",
+                        data=csv,
+                        file_name=f"youtube_comments_{video_id}.csv",
+                        mime="text/csv",
+                    )
