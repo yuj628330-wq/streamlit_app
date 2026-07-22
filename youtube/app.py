@@ -28,8 +28,8 @@ download_korean_font()
 
 # --- 2. 유튜브 API 함수 정의 ---
 def extract_video_id(url):
-    """유튜브 URL에서 Video ID 추출"""
-    regex = r"(?:v=|\/([0-9A-Za-z_-]{11}).*[\?&]v=|^you\.tu\/|embed\/|shorts\/)([0-9A-Za-z_-]{11})"
+    """유튜브 URL에서 Video ID 추출 (일반, Shorts, youtu.be 단축키 모두 지원)"""
+    regex = r"(?:v=|\/|be\/|shorts\/|^)([0-9A-Za-z_-]{11})"
     match = re.search(regex, url)
     return match.group(1) if match else None
 
@@ -77,7 +77,6 @@ st.markdown("유튜브 영상 URL을 입력하면 댓글 데이터 시각화 결
 # 사이드바: Secrets 또는 직접 입력받는 API 키
 with st.sidebar:
     st.header("🔑 설정")
-    # Streamlit Secrets에 저장된 키가 있으면 가져오고, 없으면 직접 입력받음
     default_api_key = st.secrets.get("YOUTUBE_API_KEY", "")
     api_key = st.text_input(
         "YouTube API Key", value=default_api_key, type="password"
@@ -85,7 +84,7 @@ with st.sidebar:
 
 video_url = st.text_input(
     "유튜브 영상 링크 입력",
-    placeholder="https://www.youtube.com/watch?v=...",
+    placeholder="https://www.youtube.com/watch?v=... 또는 https://youtu.be/...",
 )
 max_comments = st.slider("수집할 최대 댓글 수", 50, 500, 200, step=50)
 
@@ -106,7 +105,7 @@ if st.button("댓글 분석 시작"):
             if df is not None and not df.empty:
                 st.success(f"총 {len(df)}개의 댓글을 성공적으로 가져왔습니다!")
 
-                #탭 구분
+                # 탭 구분
                 tab1, tab2, tab3 = st.tabs(
                     ["📊 데이터 요약 및 시각화", "☁️ 워드 클라우드", "📋 Raw 데이터"]
                 )
