@@ -1,133 +1,104 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# 1. 페이지 설정
-st.set_page_config(page_title="🌱 초보자용 주식 분석기", layout="centered")
+# 페이지 설정
+st.set_page_config(page_title="초보자용 주식 분석기", layout="wide")
+
+# 제목 부분
 st.title("🌱 주식 초보를 위한 친절한 분석기")
-st.write("궁금한 회사의 이름을 입력하면, 어려운 용어 없이 쉽게 설명해 드릴게요!")
+st.write("어려운 용어 없이 주식 정보를 쉽게 풀어서 알려드립니다.")
 
-# 한글 주식명을 종목 코드(Ticker)로 바꿔주는 간단한 사전
-# (실제 서비스 시에는 더 많은 종목이나 한국투자증권/네이버금융 API 연동을 추천합니다)
-TICKER_MAP = {
-    "삼성전자": "005930.KS",
-    "애플": "AAPL",
-    "테슬라": "TSLA",
-    "마이크로소프트": "MSFT",
-    "카카오": "035720.KS",
-    "네이버": "035420.KS"
-}
+# 1. 주식 입력 받기
+# 한국 주식은 종목코드.KS (예: 005930.KS), 미국 주식은 티커 (예: AAPL)를 입력해야 정확합니다.
+stock_name = st.text_input("분석하고 싶은 주식의 코드나 이름을 입력하세요.", value="005930.KS")
+st.caption("팁: 삼성전자는 005930.KS, 애플은 AAPL, 테슬라는 TSLA를 입력해보세요!")
 
-# 2. 사용자 검색창
-user_input = st.text_input("🔍 주식 이름 입력 (예: 삼성전자, 애플)", "")
-
-if user_input:
-    # 딕셔너리에 있으면 코드를 가져오고, 없으면 입력한 영문 티커를 그대로 사용
-    ticker_symbol = TICKER_MAP.get(user_input, user_input)
-    
-    with st.spinner('정보를 꼼꼼히 모으고 있어요... ⏳'):
-        try:
-            stock = yf.Ticker(ticker_symbol)
-            info = stock.info
+if stock_name:
+    try:
+        # 데이터 불러오기
+        ticker = yf.Ticker(stock_name)
+        
+        # 회사 정보 및 주가 데이터 가져오기 (최근 1년치)
+        info = ticker.info
+        hist = ticker.history(period="1y")
+        
+        if hist.empty:
+            st.error("주식 정보를 찾을 수 없습니다. 코드를 확인해주세요.")
+        else:
+            # --- [A] 회사 설명 (3줄 요약) ---
+            st.subheader(f"🏢 '{info.get('longName', stock_name)}'은 어떤 회사인가요?")
+            full_desc = info.get('longBusinessSummary', '회사 설명 정보가 없습니다.')
             
-            # 화폐 단위 설정 (한국 주식은 ₩, 미국은 $)
-            currency = "₩" if info.get('currency') == 'KRW' else "$"
+            # 초보자를 위해 영문 설명을 간단히 3줄 정도로 요약 (앞부분 발췌)
+            # (실제 한국어 번역 API는 유료가 많아 여기서는 앞부분을 잘라 보여줍니다)
+            desc_lines = full_desc.split('.')[:3]
+            summary = ".\n".join(desc_lines) + "."
+            st.info(summary)
+
+            # --- [B] 현재 주가 및 전일 대비 변동 ---
+            current_price = hist['Close'].iloc[-1]
+            yesterday_price = hist['Close'].iloc[-2]
+            change_percent = ((current_price - yesterday_price) / yesterday_price) * 100
+            
+            currency = info.get('currency', '단위')
             
             st.divider()
+            col1, col2 = st.columns(2)
             
-            # --- [1] 회사 3줄 설명 ---
-            st.subheader(f"🏢 {user_input} (은)는 어떤 회사인가요?")
-            # yfinance는 기본적으로 영어 설명을 제공합니다. 
-            # 초보자를 위해 주요 종목은 미리 준비된 한글 설명을 띄우고, 없으면 영문을 보여줍니다.
-            kr_descriptions = {
-                "삼성전자": "1. 한국을 대표하는 세계적인 반도체 및 가전제품 기업입니다.\n2. 스마트폰(갤럭시)과 메모리 반도체 시장에서 전 세계 1, 2위를 다투고 있습니다.\n3. 안정적인 수익을 바탕으로 꾸준히 배당금을 지급하는 주식으로 유명해요.",
-                "애플": "1. 아이폰, 아이패드, 맥북 등을 만드는 글로벌 1등 IT 기업입니다.\n2. 전 세계 수많은 사람들이 애플의 생태계 안에서 제품을 반복해서 구매합니다.\n3. 충성도 높은 고객들을 바탕으로 엄청난 현금을 벌어들이고 있어요."
-            }
-            if user_input in kr_descriptions:
-                st.info(kr_descriptions[user_input])
-            else:
-                summary = info.get('longBusinessSummary', '회사 정보를 불러올 수 없습니다.')
-                st.info(f"(영어 원문 요약)\n\n{summary[:300]}...") # 긴 영어는 잘라서 보여줌
+            with col1:
+                st.metric(label="현재 가격", value=f"{current_price:,.0f} {currency}", 
+                          delta=f"{change_percent:.2f}% (어제 대비)")
             
-            # --- [2] 현재 주가 및 어제와 비교 ---
-            # 최근 1년(1y) 데이터를 가져와서 활용
-            hist = stock.history(period="1y")
-            
-            if len(hist) >= 2:
-                current_price = hist['Close'].iloc[-1]
-                yesterday_price = hist['Close'].iloc[-2]
-                pct_change = ((current_price - yesterday_price) / yesterday_price) * 100
-                
-                st.subheader("💰 현재 주가")
-                # st.metric을 사용하면 자동으로 화살표와 색상(빨강/초록)을 넣어줍니다.
-                st.metric(
-                    label="오늘의 가격", 
-                    value=f"{currency}{current_price:,.2f}", 
-                    delta=f"어제보다 {pct_change:.2f}%"
-                )
-            
-            # --- [3] 과거 주가 비교 (3, 6, 9, 12개월 전) ---
-            st.write("📅 **시간이 지나면서 가격이 어떻게 변했을까요?**")
-            
-            # 오늘을 기준으로 날짜 계산
-            today = hist.index[-1]
-            dates = {
-                "3개월 전": today - pd.DateOffset(months=3),
-                "6개월 전": today - pd.DateOffset(months=6),
-                "9개월 전": today - pd.DateOffset(months=9),
-                "1년 전": today - pd.DateOffset(months=12)
-            }
-            
-            cols = st.columns(4)
-            for i, (label, target_date) in enumerate(dates.items()):
-                # 해당 날짜와 가장 가까운 과거의 주가를 찾음
-                past_data = hist[hist.index <= target_date]
-                if not past_data.empty:
-                    past_price = past_data['Close'].iloc[-1]
-                    cols[i].metric(label=label, value=f"{currency}{past_price:,.0f}")
-                else:
-                    cols[i].metric(label=label, value="데이터 없음")
+            # --- [C] 과거 가격 비교 (3, 6, 9개월, 1년 전) ---
+            def get_past_price(days_ago):
+                target_date = datetime.now() - timedelta(days=days_ago)
+                closest_price = hist.iloc[hist.index.get_indexer([target_date], method='nearest')[0]]['Close']
+                return closest_price
 
-            # --- [4] 주가 시각화 (그래프) ---
-            st.subheader("📈 1년간 주가 흐름 보기")
-            # 초보자가 보기 쉽게 종가(Close)만 추출해서 선 그래프로 그림
+            with col2:
+                st.write("📅 **과거에는 얼마였을까요?**")
+                p3 = get_past_price(90)
+                p6 = get_past_price(180)
+                p9 = get_past_price(270)
+                p1y = get_past_price(365)
+                
+                past_df = pd.DataFrame({
+                    "시점": ["3개월 전", "6개월 전", "9개월 전", "1년 전"],
+                    "가격": [f"{p3:,.0f}", f"{p6:,.0f}", f"{p9:,.0f}", f"{p1y:,.0f}"]
+                })
+                st.table(past_df)
+
+            # --- [D] 주가 시각화 ---
+            st.subheader("📈 지난 1년간의 주가 흐름")
             st.line_chart(hist['Close'])
 
-            # --- [5] 어려운 용어(PER, PBR, PSR) 쉽게 풀어 쓰기 ---
+            # --- [E] 어려운 용어 풀이 (PSR, PER, PBR) ---
             st.divider()
-            st.subheader("📊 회사의 현재 가치 평가 (쉬운 설명)")
-            st.write("주식이 지금 비싼 편인지, 싼 편인지 확인하는 3가지 마법의 숫자예요.")
+            st.subheader("📊 이 주식은 지금 비싼가요, 싼가요?")
+            st.write("어려운 용어 대신 쉽게 풀어서 설명해 드릴게요.")
 
-            # 1. PSR (주가매출비율)
-            psr = info.get('priceToSalesTrailing12Months')
+            # 1. PSR 풀이
+            psr = info.get('priceToSalesTrailing12Months', 0)
             if psr:
-                psr_eval = "높은 편(기대감이 큼)" if psr > 3 else "낮은 편(저평가 가능성)"
-                st.success(
-                    f"**🛒 매출 대비 가치 (기존 용어: PSR)**\n\n"
-                    f"이 회사의 전체 덩치(시가총액)는 1년 동안 물건을 팔아서 번 돈(매출)의 **{psr:.1f}배** 수준입니다. "
-                    f"다른 일반적인 회사들과 비교했을 때 **{psr_eval}**이에요."
-                )
-            
-            # 2. PER (주가수익비율)
-            per = info.get('trailingPE')
+                psr_status = "높은" if psr > 5 else "낮은"
+                st.success(f"**1. 매출액과 비교하기 (PSR):**\n\n 현재 이 회사의 전체 몸값은 1년 동안 물건을 팔아서 번 돈의 **{psr:.2f}배** 입니다. "
+                           f"다른 비슷한 회사들과 비교했을 때 주가가 조금 **{psr_status}** 편에 속합니다.")
+
+            # 2. PER 풀이
+            per = info.get('trailingPE', 0)
             if per:
-                per_eval = "높은 편(인기가 많거나 고평가)" if per > 15 else "낮은 편(저렴함)"
-                st.warning(
-                    f"**💸 이익 대비 가치 (기존 용어: PER)**\n\n"
-                    f"이 회사의 가치는 1년 동안 '순수하게 남긴 이익'의 **{per:.1f}배**로 평가받고 있어요. "
-                    f"일반적으로 10~15배를 적당하다고 보는데, 현재는 **{per_eval}**입니다. 숫자가 낮을수록 돈 버는 능력에 비해 주가가 싸다는 뜻이에요."
-                )
+                per_status = "높은" if per > 20 else "낮은"
+                st.warning(f"**2. 벌어들인 이익과 비교하기 (PER):**\n\n 현재 이 회사의 전체 몸값은 1년 동안 순수하게 남긴 이익의 **{per:.2f}배** 입니다. "
+                           f"회사가 버는 돈에 비해 주가가 **{per_status}** 편입니다.")
 
-            # 3. PBR (주가순자산비율)
-            pbr = info.get('priceToBook')
+            # 3. PBR 풀이
+            pbr = info.get('priceToBook', 0)
             if pbr:
-                pbr_eval = "프리미엄을 받고 있어요" if pbr > 1 else "가진 재산보다 주가가 더 싸게 거래되고 있어요"
-                st.info(
-                    f"**🏢 재산 대비 가치 (기존 용어: PBR)**\n\n"
-                    f"회사가 가진 순수한 재산(자본)에 비해 주가가 **{pbr:.1f}배**입니다. "
-                    f"즉, 회사가 당장 문을 닫고 재산을 다 팔아치운다고 가정했을 때, **{pbr_eval}**. (1보다 낮으면 아주 저렴하다는 뜻입니다.)"
-                )
+                pbr_status = "높은" if pbr > 1 else "낮은"
+                st.info(f"**3. 회사가 가진 재산과 비교하기 (PBR):**\n\n 이 회사가 가진 모든 재산(건물, 기계 등)을 다 팔았을 때 나오는 돈보다 주가가 **{pbr:.2f}배** 비쌉니다. "
+                        f"보통 1보다 낮으면 재산보다 주가가 싸다는 뜻인데, 현재는 **{pbr_status}** 상태입니다.")
 
-        except Exception as e:
-            st.error("앗! 데이터를 불러오는 데 문제가 생겼어요. 주식 이름이나 코드를 다시 확인해 주세요.")
+    except Exception as e:
+        st.error(f"데이터를 가져오는 중 오류가 발생했습니다: {e}")
