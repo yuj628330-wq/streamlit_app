@@ -1,4 +1,5 @@
 # 난민 보온 가이드 (Streamlit) - 보온재 냉각 실험 기반
+# 실행: pip install streamlit numpy pandas  →  streamlit run app.py
 import numpy as np, pandas as pd, streamlit as st
 
 st.set_page_config(page_title="체온 지킴이", page_icon="🧣", layout="wide")
@@ -18,7 +19,7 @@ def fit():
     return {n: k["맨몸(대조군)"] / k[n] for n in k}  # 열저항 배율(대조군=1)
 RATIO = fit()
 
-# ---------- 2. 환경·사람 계수 (가정값) ----------
+# ---------- 2. 환경·사람 계수 (가정값: 보고서에 근거 명시 필요) ----------
 WIND = {"바람 없음(실내·텐트)": 1.0, "약한 바람": 1.4, "강한 바람": 2.0}
 WET = {"마름": 1.0, "약간 젖음": 1.5, "흠뻑 젖음": 2.5}
 GROUND = {"깔개 있음": 1.0, "맨바닥·흙": 1.3, "눈·얼음 바닥": 1.6}
@@ -31,10 +32,11 @@ def simulate(ratio_total, Tenv, person, wind, wet, ground, hours=24, dt=30):
     Cb = m * 3500; T = 37.0; ts, Ts = [0], [T]
     for i in range(int(hours * 3600 / dt)):
         T += (P - G * (T - Tenv)) / Cb * dt
+        T = min(T, 37.0)  # 더우면 땀 등으로 37℃ 유지(항상성)
         ts.append((i + 1) * dt / 3600); Ts.append(T)
     ts, Ts = np.array(ts), np.array(Ts)
     hit = np.where(Ts < 35)[0]
-    return ts, Ts, (ts[hit[0]] if len(hit) else None), Tenv + P / G
+    return ts, Ts, (ts[hit[0]] if len(hit) else None), min(Tenv + P / G, 37.0)
 
 def layered(mats):  # 직렬 단열: 열저항 증가분을 더함 (가정)
     return 1 + sum(RATIO[x] - 1 for x in mats) if mats else 1.0
@@ -45,7 +47,7 @@ st.caption("고등학교 동아리 실험(보온재별 냉각 실험)에 기반�
 
 with st.sidebar:
     st.header("① 환경")
-    Tenv = st.slider("바깥 기온(℃)", -25, 15, -5)
+    Tenv = st.slider("바깥 기온(℃)", -10, 35, 0)
     wind = st.radio("바람", list(WIND)); wet = st.radio("옷 상태", list(WET)); ground = st.radio("바닥", list(GROUND))
     st.header("② 사람")
     person = st.selectbox("누구인가요?", list(PEOPLE))
@@ -61,7 +63,8 @@ with tab1:
     c1.metric("35℃ 도달까지(현재 보온)", f"{t35:.1f}시간" if t35 else "24시간 내 안전")
     c2.metric("보온 없을 때", f"{t35_0:.1f}시간" if t35_0 else "24시간 내 안전")
     c3.metric("예상 평형 체온", f"{Teq:.1f}℃")
-    if t35 is None: st.success("현재 조건에서는 24시간 안에 저체온증 기준에 도달하지 않을 것으로 예상됩니다.")
+    if Tenv >= 25: st.info("🌞 기온이 높아 보온재가 필요하지 않습니다. 오히려 더위·탈수에 주의하고 그늘과 물을 확보하세요.")
+    elif t35 is None: st.success("현재 조건에서는 24시간 안에 저체온증 기준에 도달하지 않을 것으로 예상됩니다.")
     elif t35 < 3: st.error("⚠️ 매우 위험: 즉시 바람을 피하고, 젖은 옷을 벗고, 보온재를 더하세요.")
     else: st.warning("주의: 시간이 지나면 위험해질 수 있습니다.")
     st.line_chart(pd.DataFrame({"현재 보온": Ts, "보온 없음": Ts0, "저체온증 기준": 35}, index=ts.round(2)),
@@ -76,7 +79,7 @@ with tab1:
     tips.append("여러 명이 붙어 앉기, 머리·목 덮기, 따뜻한 음식 섭취(열 생산 연료).")
     for x in tips: st.markdown(f"- {x}")
     extra = (PEOPLE[person][2] * WIND[wind] * WET[wet] * GROUND[ground] * (37 - Tenv)) * (1 - 1 / layered(mats)) * 86400 / 4184
-    st.info(f"🍙 현재 보온재가 하루 동안 아껴 주는 열량 ≈ **{extra:,.0f} kcal** (주먹밥 약 {extra/180:.0f}개 분량, 항상성 유지 부담 감소)")
+    if Tenv < 25: st.info(f"🍙 현재 보온재가 하루 동안 아껴 주는 열량 ≈ **{extra:,.0f} kcal** (주먹밥 약 {extra/180:.0f}개 분량, 항상성 유지 부담 감소)")
 
 with tab2:
     rows = []
